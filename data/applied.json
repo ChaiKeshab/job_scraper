@@ -1,0 +1,22 @@
+{
+    "asterdio": {
+        "name": "asterdio",
+        "link": "https: //asterdio.com/jobs/sr-front-end-developer/",
+        "title": "Sr. Front-End Developer",
+        "dateApplied": "10/5/2025"
+    },
+    "Spices Research & Consulting": {
+        "name": "Spices Research & Consulting",
+        "link": "https://career.f1soft.com/jobs/front-end-engineer",
+        "title": "Front-end Engineer",
+        "lvl": "MID",
+        "dateApplied": "10/5/2025"
+    },
+    "Hamro Bazar Ventures": {
+        "name": "Hamro Bazar Ventures",
+        "link": "https://career.f1soft.com/jobs/frontend-engineer-hamrobazar",
+        "title": "Frontend Engineer",
+        "lvl": "SENIOR",
+        "dateApplied": "10/6/2025"
+    }
+}
