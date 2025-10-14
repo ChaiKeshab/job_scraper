@@ -33,7 +33,12 @@ CREATE TABLE "jobs" (
 	"jobUrl" text,
 	"salaryRange" varchar(100),
 	"employmentType" varchar(100),
-	"description" text
+	"description" text,
+	"postedDate" date NOT NULL,
+	"deadline" date,
+	"isEstimated" boolean DEFAULT false,
+	"createdAt" timestamp DEFAULT now(),
+	"updatedAt" timestamp DEFAULT now()
 );
 --> statement-breakpoint
 CREATE TABLE "notes" (

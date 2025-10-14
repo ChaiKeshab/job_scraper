@@ -1,5 +1,5 @@
 {
-  "id": "7d0ef09e-f04d-4e59-a265-893c1725ee69",
+  "id": "5539cc55-9d4c-4d08-9c92-f152c214a830",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -290,6 +290,39 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "postedDate": {
+          "name": "postedDate",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "deadline": {
+          "name": "deadline",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "isEstimated": {
+          "name": "isEstimated",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
         }
       },
       "indexes": {},

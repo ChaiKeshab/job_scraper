@@ -6,6 +6,6 @@ import { parseSmartHirePro } from "./parser";
 export async function scrapeSmartHirePro(): Promise<JobItem[]> {
     const url = "https://smarthirepro.com/company/gurzu-inc/";
     const $ = await scrapeStatic(url);
-    const jobs = parseSmartHirePro($);
+    const jobs = parseSmartHirePro({ $, website: url });
     return jobs;
 }

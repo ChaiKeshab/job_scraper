@@ -1,4 +1,4 @@
-import type { LevelType } from "./shared/types";
+import type { LevelType } from "./types";
 
 const map = {
     frontend: ["front-end", "frontend", "front end", "react", "vue", "angular", "javascript", "typescript"],
