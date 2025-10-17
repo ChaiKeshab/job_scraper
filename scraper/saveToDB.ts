@@ -1,172 +1,213 @@
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, inArray, sql, and, or } from "drizzle-orm";
 import { db } from "@/db";
 import { companiesTable } from "@/db/schema/companies";
-import { type DbJobsType, jobsTable } from "@/db/schema/jobs";
+import { jobsTable, type DbJobsType } from "@/db/schema/jobs";
 import { tagsTable, jobTagsTable } from "@/db/schema/tags";
 import type { JobItem } from "./shared/types";
 import dayjs from "dayjs";
 import { formattedDate } from "./shared/utils";
 
 export async function saveJobsToDB(jobs: JobItem[]) {
+    if (jobs.length === 0) return;
 
-    const uniqueTags = new Set<string>();
-    for (const job of jobs) {
-        uniqueTags.add(job.tags.level.trim().toLowerCase());
-        for (const role of job.tags.roles) {
-            uniqueTags.add(role.trim().toLowerCase());
+    await db.transaction(async (tx) => {
+        // === STEP 1: PREPARE TAGS FOR THE WHOLE BATCH ===
+        const uniqueTags = new Set<string>();
+        for (const job of jobs) {
+            if (job.tags.level) uniqueTags.add(job.tags.level.trim().toLowerCase());
+            for (const role of job.tags.roles) uniqueTags.add(role.trim().toLowerCase());
         }
-    }
+        const allTagsArray = Array.from(uniqueTags);
+        const tagMap = new Map<string, number>();
 
-    const allTagsArray = Array.from(uniqueTags);
-    let tagMap = new Map<string, number>(); // Map tag name -> tag ID
+        if (allTagsArray.length > 0) {
+            const existingTags = await tx
+                .select({ id: tagsTable.id, name: tagsTable.name })
+                .from(tagsTable)
+                .where(inArray(tagsTable.name, allTagsArray));
 
-    if (allTagsArray.length > 0) {
-        // A. Single Batch Check: Fetch all existing tags
-        const existingTags = await db
-            .select({ id: tagsTable.id, name: tagsTable.name })
-            .from(tagsTable)
-            .where(inArray(tagsTable.name, allTagsArray));
+            const existingTagNames = new Set<string>();
+            for (const tag of existingTags) {
+                tagMap.set(tag.name, tag.id);
+                existingTagNames.add(tag.name);
+            }
 
-        // Populate map and identify missing tags
-        const existingTagNames = new Set<string>();
-        for (const tag of existingTags) {
-            tagMap.set(tag.name, tag.id);
-            existingTagNames.add(tag.name);
+            const missingTags = allTagsArray
+                .filter((t) => !existingTagNames.has(t))
+                .map((name) => ({ name }));
+
+            if (missingTags.length > 0) {
+                const newTags = await tx
+                    .insert(tagsTable)
+                    .values(missingTags)
+                    .returning({ id: tagsTable.id, name: tagsTable.name });
+                newTags.forEach((tag) => tagMap.set(tag.name, tag.id));
+            }
         }
 
-        const missingTags = allTagsArray
-            .filter(t => !existingTagNames.has(t))
-            .map(name => ({ name }));
+        // === STEP 2: BATCH UPSERT COMPANIES ===
+        const uniqueCompanies = Array.from(
+            new Map(
+                jobs.map((j) => [
+                    j.company.trim(),
+                    {
+                        name: j.company.trim(),
+                        website: j.website || null,
+                        location: j.location || null,
+                        industry: j.industry || null,
+                    },
+                ])
+            ).values()
+        );
 
-        // B. Single Batch Insert: Insert all missing tags
-        if (missingTags.length > 0) {
-            const newTags = await db
-                .insert(tagsTable)
-                .values(missingTags)
-                .returning({ id: tagsTable.id, name: tagsTable.name });
+        const existingCompanies = await tx
+            .select({ id: companiesTable.id, name: companiesTable.name })
+            .from(companiesTable)
+            .where(inArray(companiesTable.name, uniqueCompanies.map((c) => c.name)));
 
-            // Add new tags to the map
-            newTags.forEach(tag => tagMap.set(tag.name, tag.id));
-        }
-    }
+        const nameToCompanyId = new Map(existingCompanies.map((c) => [c.name, c.id]));
+        const missingCompanies = uniqueCompanies.filter((c) => !nameToCompanyId.has(c.name));
 
-    for (const job of jobs) {
-        try {
-            const [company] = await db
+        if (missingCompanies.length > 0) {
+            const inserted = await tx
                 .insert(companiesTable)
-                .values({
-                    name: job.company,
-                    website: job.website || null,
-                    location: job.location || null,
-                    industry: job.industry || null,
-                })
+                .values(missingCompanies)
                 .onConflictDoUpdate({
                     target: companiesTable.name,
                     set: {
-                        // Only update website if it's non-null AND different from existing
                         website: sql`
-                            CASE 
-                                WHEN ${companiesTable.website} IS DISTINCT FROM excluded.website 
-                                     AND excluded.website IS NOT NULL 
-                                THEN excluded.website 
-                                ELSE ${companiesTable.website} 
-                            END
-                        `,
-                        // Only update updatedAt when website actually changed
+							CASE 
+								WHEN ${companiesTable.website} IS DISTINCT FROM excluded.website 
+									AND excluded.website IS NOT NULL 
+								THEN excluded.website 
+								ELSE ${companiesTable.website} 
+							END
+						`,
                         updatedAt: sql`
-                            CASE 
-                                WHEN ${companiesTable.website} IS DISTINCT FROM excluded.website 
-                                     AND excluded.website IS NOT NULL 
-                                THEN NOW() 
-                                ELSE ${companiesTable.updatedAt} 
-                            END
-                        `,
+							CASE 
+								WHEN ${companiesTable.website} IS DISTINCT FROM excluded.website 
+									AND excluded.website IS NOT NULL 
+								THEN NOW() 
+								ELSE ${companiesTable.updatedAt} 
+							END
+						`,
                     },
                 })
-                .returning();
+                .returning({ id: companiesTable.id, name: companiesTable.name });
 
+            inserted.forEach((c) => nameToCompanyId.set(c.name, c.id));
+        }
 
-            // Check if job already exists
-            const [existingJob] = await db
-                .select()
-                .from(jobsTable)
-                .where(
-                    and(
-                        eq(jobsTable.companyId, company.id),
-                        eq(jobsTable.title, job.title)
+        // === STEP 3: BATCH FETCH EXISTING JOBS ===
+        const jobCandidates = jobs.map((j) => ({
+            companyId: nameToCompanyId.get(j.company.trim())!,
+            title: j.title.trim(),
+        }));
+
+        // Build dynamic OR for (companyId, title)
+        const existingJobs = await tx
+            .select({
+                id: jobsTable.id,
+                companyId: jobsTable.companyId,
+                title: jobsTable.title,
+            })
+            .from(jobsTable)
+            .where(
+                or(
+                    ...jobCandidates.map((j) =>
+                        and(eq(jobsTable.companyId, j.companyId), eq(jobsTable.title, j.title))
                     )
                 )
-                .limit(1);
+            );
+
+        const existingJobMap = new Map<string, number>();
+        for (const j of existingJobs) {
+            existingJobMap.set(`${j.companyId}-${j.title}`, j.id);
+        }
+
+        // === STEP 4: BATCH INSERT NEW JOBS ===
+        const today = formattedDate(dayjs().toISOString())!;
+        const newJobsToInsert: DbJobsType[] = [];
+        for (const job of jobs) {
+            const companyId = nameToCompanyId.get(job.company.trim())!;
+            const key = `${companyId}-${job.title.trim()}`;
+            if (existingJobMap.has(key)) continue;
 
             const formattedPostDate = formattedDate(job.postedDate);
-            const today = formattedDate(dayjs().toISOString())!;
-
-            const jobValues: DbJobsType = {
-                companyId: company.id,
-                title: job.title,
+            newJobsToInsert.push({
+                companyId,
+                title: job.title.trim(),
                 jobUrl: job.link,
                 employmentType: job.type,
-                description: `${job.deadline || ""} | Level: ${job.tags.level} | Roles: ${job.tags.roles.join(", ")}`, // update/remove later
+                description: `${job.deadline || ""} | Level: ${job.tags.level} | Roles: ${job.tags.roles.join(", ")}`,
                 salaryRange: null,
                 postedDate: formattedPostDate ?? today,
                 deadline: job.deadline ?? null,
                 isEstimated: !formattedPostDate,
                 experience: job.experience,
                 updatedAt: new Date(),
-            };
+            });
+        }
 
-            let jobId: number;
+        let insertedJobs: { id: number; companyId: number; title: string }[] = [];
+        if (newJobsToInsert.length > 0) {
+            insertedJobs = await tx
+                .insert(jobsTable)
+                .values(newJobsToInsert)
+                .returning({ id: jobsTable.id, companyId: jobsTable.companyId, title: jobsTable.title });
+        }
 
-            // Insert or update job
-            if (existingJob) {
-                await db
-                    .update(jobsTable)
-                    .set(jobValues)
-                    .where(eq(jobsTable.id, existingJob.id));
-                jobId = existingJob.id;
-                // console.log(`Updated: ${job.title}`);
-            } else {
-                const inserted = await db.insert(jobsTable).values(jobValues).returning();
-                jobId = inserted[0].id;
-                // console.log(`Inserted: ${job.title}`);
-            }
+        // Combine both sets
+        const allJobs = [
+            ...existingJobs.map((j) => ({ id: j.id, companyId: j.companyId, title: j.title })),
+            ...insertedJobs,
+        ];
 
-            const jobTags = [job.tags.level, ...job.tags.roles]
-                .map(t => t.trim().toLowerCase())
-                .filter(Boolean);
+        // === STEP 5: JOB-TAG LINKS (UNCHANGED, STILL BATCHED) ===
+        const jobIdToTagsMap = new Map<number, string[]>();
+        for (const job of jobs) {
+            const companyId = nameToCompanyId.get(job.company.trim())!;
+            const key = `${companyId}-${job.title.trim()}`;
+            const jobId = existingJobMap.get(key) || insertedJobs.find((j) => j.title === job.title && j.companyId === companyId)?.id;
+            if (jobId)
+                jobIdToTagsMap.set(
+                    jobId,
+                    [job.tags.level, ...job.tags.roles]
+                        .map((t) => t.trim().toLowerCase())
+                        .filter(Boolean)
+                );
+        }
 
-            if (jobTags.length > 0) {
-                const tagIdsToLink = jobTags
-                    .map(name => tagMap.get(name))
-                    .filter((id): id is number => id !== undefined); // Ensure tag ID exists
+        const existingJobLinks = await tx
+            .select({ jobId: jobTagsTable.jobId, tagId: jobTagsTable.tagId })
+            .from(jobTagsTable)
+            .where(inArray(jobTagsTable.jobId, Array.from(jobIdToTagsMap.keys())));
 
-                // Get existing links for this job
-                const existingLinks = await db
-                    .select({ tagId: jobTagsTable.tagId })
-                    .from(jobTagsTable)
-                    .where(eq(jobTagsTable.jobId, jobId));
+        const jobIdToExistingTagIds = new Map<number, Set<number>>();
+        for (const link of existingJobLinks) {
+            if (!jobIdToExistingTagIds.has(link.jobId))
+                jobIdToExistingTagIds.set(link.jobId, new Set());
+            jobIdToExistingTagIds.get(link.jobId)!.add(link.tagId);
+        }
 
-                const existingTagIds = new Set(existingLinks.map(l => l.tagId));
-
-                // Prepare new links: only tag IDs that are not already linked
-                const newLinks = tagIdsToLink
-                    .filter(tagId => !existingTagIds.has(tagId))
-                    .map(tagId => ({ jobId, tagId }));
-
-                // Single batch insert of job-tag links
-                if (newLinks.length > 0) {
-                    await db.insert(jobTagsTable).values(newLinks);
+        const linksToInsert: { jobId: number; tagId: number }[] = [];
+        for (const [jobId, tagNames] of jobIdToTagsMap.entries()) {
+            const existingTagIds = jobIdToExistingTagIds.get(jobId) || new Set<number>();
+            for (const tagName of tagNames) {
+                const tagId = tagMap.get(tagName);
+                if (tagId && !existingTagIds.has(tagId)) {
+                    linksToInsert.push({ jobId, tagId });
                 }
             }
-        } catch (err) {
-            console.error(`❌ Error saving job: ${job.title}`, err);
         }
-    }
 
-    console.log("✅ All jobs processed and synced (batch tags handled)!");
+        if (linksToInsert.length > 0) {
+            await tx.insert(jobTagsTable).values(linksToInsert);
+        }
+    });
+
+    console.log("✅ All jobs processed and synced (fully transactional, batched companies & jobs)!");
 }
-
-
 
 /**
  * Things to handle
