@@ -8,28 +8,50 @@ import dayjs from "dayjs";
 import { formattedDate } from "./shared/utils";
 
 export async function saveJobsToDB(jobs: JobItem[]) {
+
+    const uniqueTags = new Set<string>();
+    for (const job of jobs) {
+        uniqueTags.add(job.tags.level.trim().toLowerCase());
+        for (const role of job.tags.roles) {
+            uniqueTags.add(role.trim().toLowerCase());
+        }
+    }
+
+    const allTagsArray = Array.from(uniqueTags);
+    let tagMap = new Map<string, number>(); // Map tag name -> tag ID
+
+    if (allTagsArray.length > 0) {
+        // A. Single Batch Check: Fetch all existing tags
+        const existingTags = await db
+            .select({ id: tagsTable.id, name: tagsTable.name })
+            .from(tagsTable)
+            .where(inArray(tagsTable.name, allTagsArray));
+
+        // Populate map and identify missing tags
+        const existingTagNames = new Set<string>();
+        for (const tag of existingTags) {
+            tagMap.set(tag.name, tag.id);
+            existingTagNames.add(tag.name);
+        }
+
+        const missingTags = allTagsArray
+            .filter(t => !existingTagNames.has(t))
+            .map(name => ({ name }));
+
+        // B. Single Batch Insert: Insert all missing tags
+        if (missingTags.length > 0) {
+            const newTags = await db
+                .insert(tagsTable)
+                .values(missingTags)
+                .returning({ id: tagsTable.id, name: tagsTable.name });
+
+            // Add new tags to the map
+            newTags.forEach(tag => tagMap.set(tag.name, tag.id));
+        }
+    }
+
     for (const job of jobs) {
         try {
-            // Find or insert company
-            // let [company] = await db
-            //     .select()
-            //     .from(companiesTable)
-            //     .where(eq(companiesTable.name, job.company))
-            //     .limit(1);
-
-            // if (!company) {
-            //     const inserted = await db
-            //         .insert(companiesTable)
-            //         .values({
-            //             name: job.company,
-            //             website: job.website || null,
-            //             location: job.location || null,
-            //             industry: job.industry || null,
-            //         })
-            //         .returning();
-            //     company = inserted[0];
-            // }
-
             const [company] = await db
                 .insert(companiesTable)
                 .values({
@@ -109,46 +131,29 @@ export async function saveJobsToDB(jobs: JobItem[]) {
                 // console.log(`Inserted: ${job.title}`);
             }
 
-            // Handle Tags (Batch Optimized)
-            const allTags = [job.tags.level, ...job.tags.roles]
+            const jobTags = [job.tags.level, ...job.tags.roles]
                 .map(t => t.trim().toLowerCase())
                 .filter(Boolean);
 
-            if (allTags.length > 0) {
-                // Step 1: Fetch existing tags in one query
-                const existingTags = await db
-                    .select()
-                    .from(tagsTable)
-                    .where(inArray(tagsTable.name, allTags));
+            if (jobTags.length > 0) {
+                const tagIdsToLink = jobTags
+                    .map(name => tagMap.get(name))
+                    .filter((id): id is number => id !== undefined); // Ensure tag ID exists
 
-                const existingTagNames = existingTags.map(t => t.name);
-                const missingTags = allTags.filter(t => !existingTagNames.includes(t));
-
-                //  Step 2: Insert missing tags in one go
-                let newTags: { id: number; name: string }[] = [];
-                if (missingTags.length > 0) {
-                    newTags = await db
-                        .insert(tagsTable)
-                        .values(missingTags.map(name => ({ name })))
-                        .returning();
-                }
-
-                // Step 3: Combine both existing + new tags
-                const finalTags = [...existingTags, ...newTags];
-
-                // Step 4: Get existing links to avoid duplicates
+                // Get existing links for this job
                 const existingLinks = await db
-                    .select()
+                    .select({ tagId: jobTagsTable.tagId })
                     .from(jobTagsTable)
                     .where(eq(jobTagsTable.jobId, jobId));
 
                 const existingTagIds = new Set(existingLinks.map(l => l.tagId));
 
-                // Step 5: Insert only new links
-                const newLinks = finalTags
-                    .filter(tag => !existingTagIds.has(tag.id))
-                    .map(tag => ({ jobId, tagId: tag.id }));
+                // Prepare new links: only tag IDs that are not already linked
+                const newLinks = tagIdsToLink
+                    .filter(tagId => !existingTagIds.has(tagId))
+                    .map(tagId => ({ jobId, tagId }));
 
+                // Single batch insert of job-tag links
                 if (newLinks.length > 0) {
                     await db.insert(jobTagsTable).values(newLinks);
                 }
