@@ -1,7 +1,6 @@
 import type { JobItem } from "@/scraper/shared/types";
-import { detectTags } from "@/scraper/shared/utils";
+import { chronoDate, detectTags } from "@/scraper/shared/utils";
 import type { CheerioAPI } from "cheerio";
-import * as chrono from "chrono-node";
 import dayjs from "dayjs";
 
 interface ParseSmartHireProType {
@@ -21,48 +20,62 @@ export function parseSmartHirePro({ $, website }: ParseSmartHireProType): JobIte
         const type = job.find(".job__company span").last().text().trim();
         const logo = job.find(".job-company__logo img").attr("src") || "";
         const tags = detectTags(title);
-
         const deadline = job.find(".job__deadline").text().trim();
-        const postedRaw = job.find(".job__postdate").text().trim();
-
+        const parsedDeadline = chronoDate(deadline);
 
         /**
-         * 
-         * couldn't handle "x days remaining"
-         * 
+         * proper posted date and deadline present in deatil page.
          */
-        // --- Step 1: Try chrono parse
-        let parsedPosted = chrono.parseDate(postedRaw);
-        let isEstimated = false;
-
-        if (!parsedPosted) {
-            // --- Step 2: Fallback to dayjs direct parse
-            const parsed = dayjs(postedRaw);
-            if (parsed.isValid()) {
-                parsedPosted = parsed.toDate();
-            } else {
-                // --- Step 3: No valid date, mark as estimated
-                parsedPosted = new Date(); // fallback: use current scrape date
-                isEstimated = true;
-            }
-        }
-
-        // --- Normalize to YYYY-MM-DD
-        const postedDate = dayjs(parsedPosted).format("YYYY-MM-DD");
 
         jobs.push({
             title,
             company,
             type,
-            deadline,
+            deadline: parsedDeadline,
             logo,
             link,
             tags,
             website,
-            postedDate,
-            isEstimated,
+            postedDate: null,
+            isEstimated: true,
         });
     });
 
     return jobs;
+}
+
+
+
+export function parseSmartHireProDetail($: CheerioAPI): Partial<JobItem> {
+    let postedDate: string | null = null;
+    let type: string | null = null;
+    let experience: string | null = null;
+    let deadline: string | null = null;
+
+    $(".list-unstyled li").each((_, el) => {
+        const label = $(el).find("strong").text().trim().replace(/:$/, "");
+        const value = $(el).find("span").text().trim();
+
+        switch (label) {
+            case "Date Posted":
+                postedDate = value || null;
+                break;
+            case "Employment Type":
+                type = value || null;
+                break;
+            case "Experience":
+                experience = value || null;
+                break;
+            case "Deadline":
+                deadline = value || null;
+                break;
+        }
+    });
+
+    return ({
+        postedDate,
+        type,
+        experience,
+        deadline,
+    });
 }

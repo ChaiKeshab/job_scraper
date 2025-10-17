@@ -1,17 +1,18 @@
 export interface JobItem {
     title: string;
     company: string;
-    type: string;
-    deadline?: string; // raw text, parsed later into ISO
-    postedDate?: string; // raw text, parsed later into ISO
+    type?: string | null;
+    deadline?: string | null;
+    postedDate?: string | null;
     logo?: string;
-    link: string;
+    link?: string;
     website?: string;
     location?: string;
     industry?: string;
-    isEstimated: boolean; // flag if fallback logic used
+    experience?: string | null;
+    isEstimated: boolean; // if no postedDate present then we use scraped date as estimate with this flag as true
     tags: {
-        level: string;
+        level: LevelType;
         roles: string[];
     };
 }

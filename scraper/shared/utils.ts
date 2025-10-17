@@ -1,4 +1,6 @@
+import dayjs from "dayjs";
 import type { LevelType } from "./types";
+import * as chrono from "chrono-node";
 
 const map = {
     frontend: ["front-end", "frontend", "front end", "react", "vue", "angular", "javascript", "typescript"],
@@ -32,10 +34,31 @@ export function detectTags(title: string) {
     return { level, roles: roleTags };
 }
 
+export const chronoDate = (dateString: string) => {
+    // chrono couldn't handle for x days remaining
+    // 1. Match patterns like "3 days remaining"
+    const remainingMatch = dateString.match(/(\d+)\s+days?\s+remaining/i);
 
+    if (remainingMatch) {
+        const days = parseInt(remainingMatch[1], 10);
+        const targetDate = dayjs().add(days, "day").format("YYYY-MM-DD");
+        return targetDate;
+    }
 
-export const cleanText = (text?: string | null) => {
-    return text?.replace(/\s+/g, " ").trim() || "";
+    // 2. Fallback: Try normal chrono parsing for other formats
+    const parsed = chrono.parse(dateString);
+
+    if (parsed.length > 0) {
+        const date = parsed[0].start.date();
+        return dayjs(date).format("YYYY-MM-DD");
+    }
+
+    return null;
 };
 
 
+export const formattedDate = (date?: string | null) => {
+    if (!date) return null;
+    const parsed = dayjs(date);
+    return parsed.isValid() ? parsed.format("YYYY-MM-DD") : null;
+};
